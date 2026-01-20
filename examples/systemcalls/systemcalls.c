@@ -1,4 +1,10 @@
 #include "systemcalls.h"
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 /**
  * @param cmd the command to execute with system()
@@ -16,6 +22,13 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
+    int rtn = system(cmd);
+    if (rtn == -1)
+        return false;
+    if (WIFSIGNALED(rtn))
+        return false;
+    if (WIFEXITED(rtn) && WEXITSTATUS(rtn) != 0)
+        return false;
 
     return true;
 }
@@ -58,6 +71,27 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+    // Check if absolute path
+    if (command[0][0] != '/')
+        return false;
+
+    pid_t pid = fork();
+
+    if (pid == -1)
+        return false;
+    if (pid == 0) {  // child
+        if (execv(command[0], command) == -1)
+            return false;
+    }
+    else {  // parent
+        int wstatus;
+        if (wait(&wstatus) == -1)
+            return false;
+        if (WIFSIGNALED(wstatus))
+            return false;
+        if (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) != 0)
+            return false;
+    }
 
     va_end(args);
 
@@ -92,6 +126,33 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
+    // Check if absolute path
+    if (command[0][0] != '/')
+        return false;
+
+    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 644);
+    if (fd < 0)
+        return false;
+
+    pid_t pid = fork();
+    if (pid == -1)
+        return false;
+    else if (pid == 0) {  // child
+        if (dup2(fd, 1) < 0)
+            return false;
+        if (execv(command[0], command) == -1)
+            return false;
+    }
+    else {  // parent
+        close(fd);
+        int wstatus;
+        if (wait(&wstatus) == -1)
+            return false;
+        if (WIFSIGNALED(wstatus))
+            return false;
+        if (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) != 0)
+            return false;
+    }
 
     va_end(args);
 
