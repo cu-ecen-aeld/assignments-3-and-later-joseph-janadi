@@ -38,11 +38,12 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} mrproper
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
     make -j4 ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} all
-    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} modules
+    #make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} modules
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} dtbs
 fi
 
 echo "Adding the Image in outdir"
+cp ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ${OUTDIR}
 
 echo "Creating the staging directory for the root filesystem"
 cd "$OUTDIR"
@@ -88,24 +89,26 @@ cp -a ${SYSROOT}/lib64/libc.so.6 \
     ${OUTDIR}/rootfs/lib64
 
 # TODO: Make device nodes
-fakeroot mknod -m 666 ${OUTDIR}/rootfs/dev/null c 1 3
-fakeroot mknod -m 666 ${OUTDIR}/rootfs/dev/console c 5 1
+sudo mknod -m 666 ${OUTDIR}/rootfs/dev/null c 1 3
+sudo mknod -m 666 ${OUTDIR}/rootfs/dev/console c 5 1
 
 # TODO: Clean and build the writer utility
 FINDERDIR=/home/jjanadi/Documents/assignments-3-and-later-joseph-janadi/finder-app
 make -C $FINDERDIR clean
-make -C $FINDERDIR
+make -C $FINDERDIR CROSS_COMPILE=${CROSS_COMPILE}
 cp -a $FINDERDIR/writer ${OUTDIR}/rootfs/home
 
 # TODO: Copy the finder related scripts and executables to the /home directory
 # on the target rootfs
 cp -a ${FINDERDIR}/finder.sh ${FINDERDIR}/finder-test.sh \
-    ${FINDERDIR}/../conf/username.txt ${FINDERDIR}/../conf/assignment.txt \
     ${FINDERDIR}/autorun-qemu.sh \
     ${OUTDIR}/rootfs/home
+mkdir -p ${OUTDIR}/rootfs/home/conf
+cp -a ${FINDERDIR}/../conf/username.txt ${FINDERDIR}/../conf/assignment.txt \
+    ${OUTDIR}/rootfs/home/conf
 
 # TODO: Chown the root directory
-fakeroot chown root:root ${OUTDIR}/rootfs
+sudo chown root:root ${OUTDIR}/rootfs
 
 # TODO: Create initramfs.cpio.gz
 cd "${OUTDIR}/rootfs"
