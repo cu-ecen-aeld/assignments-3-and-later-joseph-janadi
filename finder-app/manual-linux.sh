@@ -94,8 +94,8 @@ sudo mknod -m 666 ${OUTDIR}/rootfs/dev/console c 5 1
 
 # TODO: Clean and build the writer utility
 FINDERDIR=/home/jjanadi/Documents/assignments-3-and-later-joseph-janadi/finder-app
-make -C $FINDERDIR clean
-make -C $FINDERDIR CROSS_COMPILE=${CROSS_COMPILE}
+#make -C $FINDERDIR clean
+#make -C $FINDERDIR CROSS_COMPILE=${CROSS_COMPILE}
 cp -a $FINDERDIR/writer ${OUTDIR}/rootfs/home
 
 # TODO: Copy the finder related scripts and executables to the /home directory
