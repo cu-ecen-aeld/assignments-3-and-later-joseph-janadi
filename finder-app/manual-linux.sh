@@ -93,18 +93,17 @@ sudo mknod -m 666 ${OUTDIR}/rootfs/dev/null c 1 3
 sudo mknod -m 666 ${OUTDIR}/rootfs/dev/console c 5 1
 
 # TODO: Clean and build the writer utility
-FINDERDIR=/home/jjanadi/Documents/assignments-3-and-later-joseph-janadi/finder-app
-#make -C $FINDERDIR clean
-#make -C $FINDERDIR CROSS_COMPILE=${CROSS_COMPILE}
-cp -a $FINDERDIR/writer ${OUTDIR}/rootfs/home
+make -C $FINDER_APP_DIR clean
+make -C $FINDER_APP_DIR CROSS_COMPILE=${CROSS_COMPILE}
+cp -a $FINDER_APP_DIR/writer ${OUTDIR}/rootfs/home
 
 # TODO: Copy the finder related scripts and executables to the /home directory
 # on the target rootfs
-cp -a ${FINDERDIR}/finder.sh ${FINDERDIR}/finder-test.sh \
-    ${FINDERDIR}/autorun-qemu.sh \
+cp -a ${FINDER_APP_DIR}/finder.sh ${FINDER_APP_DIR}/finder-test.sh \
+    ${FINDER_APP_DIR}/autorun-qemu.sh \
     ${OUTDIR}/rootfs/home
 mkdir -p ${OUTDIR}/rootfs/home/conf
-cp -a ${FINDERDIR}/../conf/username.txt ${FINDERDIR}/../conf/assignment.txt \
+cp -a ${FINDER_APP_DIR}/../conf/username.txt ${FINDER_APP_DIR}/../conf/assignment.txt \
     ${OUTDIR}/rootfs/home/conf
 
 # TODO: Chown the root directory
