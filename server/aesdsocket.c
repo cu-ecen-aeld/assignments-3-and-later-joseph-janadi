@@ -64,7 +64,6 @@ int main(int argc, char *argv[])
     size_t packet_buf_len = 500;
     char *packet_buf = (char *)malloc(packet_buf_len);
     size_t packet_len = 0;
-    char *new_packet_buf;
 
     struct sockaddr_in accepted_sockaddr;
     socklen_t addrlen = sizeof(accepted_sockaddr);
@@ -78,7 +77,7 @@ int main(int argc, char *argv[])
     ssize_t nsent;
     struct stat statbuf;
     off_t offset = 0;
-    /* Loop until SIGINT or SIGTERM */
+    /* Accept connections until SIGINT or SIGTERM */
     while (1) {
         /* Accept next connection */
         client_fd = accept(server_fd, (struct sockaddr *)&accepted_sockaddr, &addrlen);
@@ -86,40 +85,47 @@ int main(int argc, char *argv[])
         syslog(LOG_DEBUG, "Accepted connection from %u", accepted_sockaddr.sin_addr.s_addr);
 
         /* Read from socket until closed or no more data */
-        do {
-            /* Read from socket until packet finished (i.e. newline encountered) */
-            do {
-                // TODO: Peek, check for newline, receive up to newline or end
-                nread = recv(client_fd, buf, BUF_SIZE, 0);
-                if (nread == -1) { perror("recv"); return -1; }
-                newline_ptr = strchr(buf, '\n');
-                newline_pos = newline_ptr == NULL ? nread - 1 : newline_ptr - buf;
-                str_len = newline_pos + 1;
-                /* Increase packet buffer size if exceeded */
-                if ((packet_len + str_len) > packet_buf_len) {
-                    packet_buf_len *= 2;
-                    new_packet_buf = realloc(packet_buf, packet_buf_len);
-                    free(packet_buf);
-                    packet_buf = new_packet_buf;
+        while (1) {
+            /* Peek at stream contents */
+            nread = recv(client_fd, buf, BUF_SIZE, MSG_PEEK);
+            if (nread == -1) { perror("recv"); return -1; }
+            /* If socket closed or no more data, break */
+            else if (nread == 0) { break; }
+            /* Find newline character */
+            newline_ptr = strchr(buf, '\n');
+            newline_pos = newline_ptr == NULL ? nread - 1 : newline_ptr - buf;
+            str_len = newline_pos + 1;
+            /* Increase packet buffer size if exceeded */
+            if ((packet_len + str_len) > packet_buf_len) {
+                size_t new_len = packet_buf_len + str_len;
+                char *tmp = realloc(packet_buf, new_len);
+                if (tmp == NULL) {
+                    printf("realloc failed\n");
+                    return -1;
                 }
-                /* Append string to packet buffer */
-                memmove(packet_buf + packet_len, buf, str_len);
-                packet_len += str_len;
-                fwrite(packet_buf, 1, str_len, stdout);
-            } while (newline_ptr == NULL);  // End of packet
-            /* Write packet to data file */
+                packet_buf = tmp;
+                packet_buf_len = new_len;
+            }
+            /* Append str_len from stream to packet buffer */
+            nread = recv(client_fd, packet_buf + packet_len, str_len, 0);
+            if (nread == -1) { perror("recv"); return -1; }
+            packet_len += str_len;
+            /* If packet not complete, loop back to receive again */
+            if (newline_ptr == NULL)
+                continue;
+            /* If packet complete, write to data file */
             nwritten = write(datafd, packet_buf, packet_len);
             if (nwritten == -1) { perror("write"); return -1; }
-            printf("nwritten = %ld\n", nwritten);
-        } while (nread != 0);  // End of stream
+        }
 
         /* Return contents of data file to client */
         ret = fstat(datafd, &statbuf);
         if (ret == -1) { perror("stat"); return -1; }
-        offset = 0;
         nsent = sendfile(client_fd, datafd, &offset, statbuf.st_size);
         if (nsent == -1) { perror("sendfile"); return -1; }
-        printf("nsent = %ld\n", nsent);
+
+        /* Reset packet_len */
+        packet_len = 0;
 
         /* Close connection */
         ret = close(client_fd);
