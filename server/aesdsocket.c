@@ -92,7 +92,7 @@ int main(int argc, char *argv[])
             /* If socket closed or no more data, break */
             else if (nread == 0) { break; }
             /* Find newline character */
-            newline_ptr = strchr(buf, '\n');
+            newline_ptr = memchr(buf, '\n', nread);
             newline_pos = newline_ptr == NULL ? nread - 1 : newline_ptr - buf;
             str_len = newline_pos + 1;
             /* Increase packet buffer size if exceeded */
@@ -116,13 +116,13 @@ int main(int argc, char *argv[])
             /* If packet complete, write to data file */
             nwritten = write(datafd, packet_buf, packet_len);
             if (nwritten == -1) { perror("write"); return -1; }
-        }
 
-        /* Return contents of data file to client */
-        ret = fstat(datafd, &statbuf);
-        if (ret == -1) { perror("stat"); return -1; }
-        nsent = sendfile(client_fd, datafd, &offset, statbuf.st_size);
-        if (nsent == -1) { perror("sendfile"); return -1; }
+            /* Return contents of data file to client */
+            ret = fstat(datafd, &statbuf);
+            if (ret == -1) { perror("stat"); return -1; }
+            nsent = sendfile(client_fd, datafd, &offset, statbuf.st_size);
+            if (nsent == -1) { perror("sendfile"); return -1; }
+        }
 
         /* Reset packet_len */
         packet_len = 0;
@@ -134,6 +134,7 @@ int main(int argc, char *argv[])
     }
 
     freeaddrinfo(res);
+    close(server_fd);
 }
 
 void handler(int sig)
@@ -143,6 +144,7 @@ void handler(int sig)
 
     /* Close any open sockets */
     close(client_fd);
+    close(server_fd);
 
     /* Delete data file */
     ret = remove(data_file);
