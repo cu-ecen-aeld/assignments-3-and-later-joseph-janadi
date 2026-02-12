@@ -203,6 +203,7 @@ int bind_socket(char *port_str)
     }
     ret = bind(server_fd, res->ai_addr, res->ai_addrlen);
     if (ret == -1) { perror("bind"); return -1; }
+    freeaddrinfo(res);
 
     return 0;
 }
