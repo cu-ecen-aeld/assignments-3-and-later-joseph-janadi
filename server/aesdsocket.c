@@ -13,6 +13,10 @@
 #include <unistd.h>
 
 void handler(int sig);
+int set_handler(void);
+int create_daemon(void);
+int bind_socket(char *port_str);
+int resize_buf(char **buf, size_t *buf_len, size_t add_len);
 
 int server_fd = -1;
 int client_fd = -1;
@@ -22,14 +26,8 @@ int ret;
 int main(int argc, char *argv[])
 {
     /* Set signal handler for SIGINT and SIGTERM */
-    struct sigaction act;
-    act.sa_handler = handler;
-    sigemptyset(&act.sa_mask);
-    act.sa_flags = 0;
-    ret = sigaction(SIGINT, &act, NULL);
-    if (ret == -1) { perror("Error"); return -1; }
-    ret = sigaction(SIGTERM, &act, NULL);
-    if (ret == -1) { perror("Error"); return -1; }
+    ret = set_handler();
+    if (ret == -1) { return ret; }
 
     /* Create socket */
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -37,29 +35,25 @@ int main(int argc, char *argv[])
 
     /* Bind socket to port */
     char *port_str = "9000";
-    struct addrinfo hints;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_flags = AI_PASSIVE;
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    struct addrinfo *res;
-    ret = getaddrinfo(NULL, port_str, &hints, &res);
-    if (ret != 0) {
-        printf("getaddrinfo: %s\n", gai_strerror(ret));
-        return -1;
+    ret = bind_socket(port_str);
+    if (ret == -1) { return -1; }
+
+    /* If '-d' option passed, run as daemon */
+    int opt = getopt(argc, argv, "d");
+    if (opt == 'd') {
+        ret = create_daemon();
+        if (ret == -1) { return -1; }
     }
-    ret = bind(server_fd, res->ai_addr, res->ai_addrlen);
-    if (ret == -1) { perror("bind"); return -1; }
+
+    /* Set socket to listen for connections */
+    int backlog = 1;
+    ret = listen(server_fd, backlog);
+    if (ret == -1) { perror("listen"); return -1; }
 
     /* Open or create data file */
     int datafd;
     datafd = open(data_file, O_RDWR | O_APPEND | O_CREAT);
     if (datafd == -1) { perror("open"); return -1; }
-
-    /* Listen for connections */
-    int backlog = 1;
-    ret = listen(server_fd, backlog);
-    if (ret == -1) { perror("listen"); return -1; }
 
     size_t packet_buf_len = 500;
     char *packet_buf = (char *)malloc(packet_buf_len);
@@ -97,14 +91,8 @@ int main(int argc, char *argv[])
             str_len = newline_pos + 1;
             /* Increase packet buffer size if exceeded */
             if ((packet_len + str_len) > packet_buf_len) {
-                size_t new_len = packet_buf_len + str_len;
-                char *tmp = realloc(packet_buf, new_len);
-                if (tmp == NULL) {
-                    printf("realloc failed\n");
-                    return -1;
-                }
-                packet_buf = tmp;
-                packet_buf_len = new_len;
+                ret = resize_buf(&packet_buf, &packet_buf_len, str_len);
+                if (ret == -1) { return ret; }
             }
             /* Append str_len from stream to packet buffer */
             nread = recv(client_fd, packet_buf + packet_len, str_len, 0);
@@ -113,28 +101,26 @@ int main(int argc, char *argv[])
             /* If packet not complete, loop back to receive again */
             if (newline_ptr == NULL)
                 continue;
-            /* If packet complete, write to data file */
+            /* Packet complete: write to data file */
             nwritten = write(datafd, packet_buf, packet_len);
             if (nwritten == -1) { perror("write"); return -1; }
 
             /* Return contents of data file to client */
             ret = fstat(datafd, &statbuf);
             if (ret == -1) { perror("stat"); return -1; }
+            offset = 0;
             nsent = sendfile(client_fd, datafd, &offset, statbuf.st_size);
             if (nsent == -1) { perror("sendfile"); return -1; }
-        }
 
-        /* Reset packet_len */
-        packet_len = 0;
+            /* Reset packet_len */
+            packet_len = 0;
+        }
 
         /* Close connection */
         ret = close(client_fd);
         if (ret == -1 ) { perror("close"); return -1; }
         syslog(LOG_DEBUG, "Closed connection from %u", accepted_sockaddr.sin_addr.s_addr);
     }
-
-    freeaddrinfo(res);
-    close(server_fd);
 }
 
 void handler(int sig)
@@ -152,4 +138,85 @@ void handler(int sig)
     syslog(LOG_DEBUG, "Caught signal, exiting");
 
     exit(EXIT_SUCCESS);
+}
+
+int set_handler(void)
+{
+    struct sigaction act;
+    act.sa_handler = handler;
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = 0;
+    ret = sigaction(SIGINT, &act, NULL);
+    if (ret == -1) { perror("Error"); return -1; }
+    ret = sigaction(SIGTERM, &act, NULL);
+    if (ret == -1) { perror("Error"); return -1; }
+
+    return 0;
+}
+
+int create_daemon(void)
+{
+    pid_t pid = fork();                             // fork
+    if (pid == -1) { perror("fork"); return -1; }
+    if (pid > 0) { exit(EXIT_SUCCESS); }            // exit parent
+
+    pid_t sid = setsid();                           // create new session
+    if (sid == -1) { perror("setsid"); return -1; }
+
+    pid = fork();                                   // fork again
+    if (pid == -1) { perror("fork"); return -1; }
+    if (pid > 0) { exit(EXIT_SUCCESS); }            // exit parent
+
+    ret = chdir("/");                               // chdir
+    if (ret == -1) { perror("chdir"); return -1; }
+
+    umask(0);                                       // Reset file permissions
+
+    /* Redirect std fd's */
+    int fd = open("/dev/null", O_RDWR);
+    if (fd == -1) { perror("open /dev/null"); return -1; }
+    int new_fd;
+    new_fd = dup2(fd, 0);
+    if (new_fd == -1) { perror("dup2"); return -1; }
+    new_fd = dup2(fd, 1);
+    if (new_fd == -1) { perror("dup2"); return -1; }
+    new_fd = dup2(fd, 2);
+    if (new_fd == -1) { perror("dup2"); return -1; }
+    if (fd > 2)
+        close(fd);
+
+    return 0;
+}
+
+int bind_socket(char *port_str)
+{
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_flags = AI_PASSIVE;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *res;
+    ret = getaddrinfo(NULL, port_str, &hints, &res);
+    if (ret != 0) {
+        printf("getaddrinfo: %s\n", gai_strerror(ret));
+        return -1;
+    }
+    ret = bind(server_fd, res->ai_addr, res->ai_addrlen);
+    if (ret == -1) { perror("bind"); return -1; }
+
+    return 0;
+}
+
+int resize_buf(char **buf, size_t *buf_len, size_t add_len)
+{
+    size_t new_len = *buf_len + add_len;
+    char *tmp = realloc(*buf, new_len);
+    if (tmp == NULL) {
+        printf("realloc failed\n");
+        return -1;
+    }
+    *buf = tmp;
+    *buf_len = new_len;
+
+    return 0;
 }
