@@ -52,7 +52,7 @@ int main(int argc, char *argv[])
 
     /* Open or create data file */
     int datafd;
-    datafd = open(data_file, O_RDWR | O_APPEND | O_CREAT);
+    datafd = open(data_file, O_RDWR | O_APPEND | O_CREAT, 0755);
     if (datafd == -1) { perror("open"); return -1; }
 
     size_t packet_buf_len = 500;
@@ -125,9 +125,6 @@ int main(int argc, char *argv[])
 
 void handler(int sig)
 {
-    /* Complete any open connections */
-    // TODO
-
     /* Close any open sockets */
     close(client_fd);
     close(server_fd);
