@@ -11,22 +11,47 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <unistd.h>
+#include <sys/queue.h>
+#include <pthread.h>
 
-void handler(int sig);
-int set_handler(void);
+/* Linked list */
+struct conn {
+    pthread_t thread_id;
+    int completed;
+    SLIST_ENTRY(conn) conns;
+};
+SLIST_HEAD(slisthead, conn);
+struct slisthead head;
+
+/* Phtread argument struct */
+struct conn_info {
+    int fd;
+    struct sockaddr_in accepted_sockaddr;
+};
+
+/* Mutex */
+pthread_mutex_t datafd_mutex;
+
+/* Prototypes */
+void *send_receive(void *arg);
+int set_exit_handler(void);
+int set_time_handler(void);
 int create_daemon(void);
 int bind_socket(char *port_str);
 int resize_buf(char **buf, size_t *buf_len, size_t add_len);
 
+/* Globals */
 int server_fd = -1;
-int client_fd = -1;
 const char *data_file = "/var/tmp/aesdsocketdata";
+int datafd;
+const size_t BUF_SIZE = 500;
+size_t packet_buf_len = 500;
 int ret;
 
 int main(int argc, char *argv[])
 {
     /* Set signal handler for SIGINT and SIGTERM */
-    ret = set_handler();
+    ret = set_exit_handler();
     if (ret == -1) { return ret; }
 
     /* Create socket */
@@ -51,18 +76,79 @@ int main(int argc, char *argv[])
     if (ret == -1) { perror("listen"); return -1; }
 
     /* Open or create data file */
-    int datafd;
     datafd = open(data_file, O_RDWR | O_APPEND | O_CREAT, 0755);
     if (datafd == -1) { perror("open"); return -1; }
 
-    size_t packet_buf_len = 500;
-    char *packet_buf = (char *)malloc(packet_buf_len);
-    size_t packet_len = 0;
+    /* Initialize mutex */
+    pthread_mutex_init(&datafd_mutex, NULL);
+
+    /* Set time handler */
+    ret = set_time_handler();
+    if (ret == -1) { return ret; }
+
+    /* Initialize linked list */
+    SLIST_INIT(&head);
+    struct conn *new_np;
+    struct conn *np;
 
     struct sockaddr_in accepted_sockaddr;
     socklen_t addrlen = sizeof(accepted_sockaddr);
+
+    int client_fd;
+
+    pthread_t new_thread_id;
+    struct conn_info pthread_arg;
+
+    /* Accept connections until SIGINT or SIGTERM */
+    while (1) {
+        /* Accept next connection */
+        client_fd = accept(server_fd, (struct sockaddr *)&accepted_sockaddr, &addrlen);
+        if (client_fd == -1) { perror("accept"); return -1; }
+        syslog(LOG_DEBUG, "Accepted connection from %u", accepted_sockaddr.sin_addr.s_addr);
+        printf("client_fd = %d\n", client_fd);
+
+        /* Create new thread */
+        pthread_arg.fd = client_fd;
+        pthread_arg.accepted_sockaddr = accepted_sockaddr;
+        ret = pthread_create(&new_thread_id, NULL, send_receive, &pthread_arg);
+        if (ret != 0) {
+            fprintf(stderr, "Failed to create new thread: %s\n", strerror(ret));
+            exit(EXIT_FAILURE);
+        }
+
+        /* Add to linked list */
+        new_np = (struct conn *)malloc(sizeof(struct conn));
+        new_np->thread_id = new_thread_id;
+        new_np->completed = 0;
+        SLIST_INSERT_HEAD(&head, new_np, conns);
+
+        /* Iterate over linked list */
+        SLIST_FOREACH(np, &head, conns) {
+            /* Join if complete */
+            if (np->completed == 1) {
+                ret = pthread_join(np->thread_id, NULL);
+                if (ret != 0) {
+                    fprintf(stderr, "Failed to join thread: %s\n", strerror(ret));
+                    exit(EXIT_FAILURE);
+                }
+                //np->completed = 2;
+                SLIST_REMOVE(&head, np, conn, conns);
+                free(np);
+            }
+        }
+    }
+}
+
+void *send_receive(void *arg)
+{
+    struct conn_info *info = (struct conn_info *)arg;
+    int fd = info->fd;
+    struct sockaddr_in accepted_sockaddr = info->accepted_sockaddr;
+
+    struct conn *np;
+    char *packet_buf = (char *)malloc(packet_buf_len);
+    size_t packet_len = 0;
     ssize_t nread;
-    const size_t BUF_SIZE = 500;
     char buf[BUF_SIZE];
     char *newline_ptr;
     ptrdiff_t newline_pos;
@@ -71,62 +157,87 @@ int main(int argc, char *argv[])
     ssize_t nsent;
     struct stat statbuf;
     off_t offset = 0;
-    /* Accept connections until SIGINT or SIGTERM */
+    int ret;
+
+    /* Read from socket until closed or no more data */
     while (1) {
-        /* Accept next connection */
-        client_fd = accept(server_fd, (struct sockaddr *)&accepted_sockaddr, &addrlen);
-        if (client_fd == -1) { perror("accept"); return -1; }
-        syslog(LOG_DEBUG, "Accepted connection from %u", accepted_sockaddr.sin_addr.s_addr);
+        /* Peek at stream contents */
+        nread = recv(fd, buf, BUF_SIZE, MSG_PEEK);
+        if (nread == -1) { perror("recv"); break; }
+        /* If socket closed or no more data, break */
+        else if (nread == 0) { break; }
+        /* Find newline character */
+        newline_ptr = memchr(buf, '\n', nread);
+        newline_pos = newline_ptr == NULL ? nread - 1 : newline_ptr - buf;
+        str_len = newline_pos + 1;
+        /* Increase packet buffer size if exceeded */
+        if ((packet_len + str_len) > packet_buf_len) {
+            ret = resize_buf(&packet_buf, &packet_buf_len, str_len);
+            if (ret == -1) { break; }
+        }
+        /* Append str_len from stream to packet buffer */
+        nread = recv(fd, packet_buf + packet_len, str_len, 0);
+        if (nread == -1) { perror("recv"); break; }
+        packet_len += str_len;
+        /* If packet not complete, loop back to receive again */
+        if (newline_ptr == NULL)
+            continue;
 
-        /* Read from socket until closed or no more data */
-        while (1) {
-            /* Peek at stream contents */
-            nread = recv(client_fd, buf, BUF_SIZE, MSG_PEEK);
-            if (nread == -1) { perror("recv"); return -1; }
-            /* If socket closed or no more data, break */
-            else if (nread == 0) { break; }
-            /* Find newline character */
-            newline_ptr = memchr(buf, '\n', nread);
-            newline_pos = newline_ptr == NULL ? nread - 1 : newline_ptr - buf;
-            str_len = newline_pos + 1;
-            /* Increase packet buffer size if exceeded */
-            if ((packet_len + str_len) > packet_buf_len) {
-                ret = resize_buf(&packet_buf, &packet_buf_len, str_len);
-                if (ret == -1) { return ret; }
-            }
-            /* Append str_len from stream to packet buffer */
-            nread = recv(client_fd, packet_buf + packet_len, str_len, 0);
-            if (nread == -1) { perror("recv"); return -1; }
-            packet_len += str_len;
-            /* If packet not complete, loop back to receive again */
-            if (newline_ptr == NULL)
-                continue;
-            /* Packet complete: write to data file */
-            nwritten = write(datafd, packet_buf, packet_len);
-            if (nwritten == -1) { perror("write"); return -1; }
+        /* Packet complete: write to data file */
+        ret = pthread_mutex_lock(&datafd_mutex);      // Lock datafd
+        if (ret != 0) { 
+            fprintf(stderr, "Error locking mutex: %s\n", strerror(ret));
+            exit(EXIT_FAILURE);
+        }
+        nwritten = write(datafd, packet_buf, packet_len);
+        if (nwritten == -1) { perror("write"); break; }
 
-            /* Return contents of data file to client */
-            ret = fstat(datafd, &statbuf);
-            if (ret == -1) { perror("stat"); return -1; }
-            offset = 0;
-            nsent = sendfile(client_fd, datafd, &offset, statbuf.st_size);
-            if (nsent == -1) { perror("sendfile"); return -1; }
-
-            /* Reset packet_len */
-            packet_len = 0;
+        /* Return contents of data file to client */
+        ret = fstat(datafd, &statbuf);
+        if (ret == -1) { perror("stat"); break; }
+        offset = 0;
+        nsent = sendfile(fd, datafd, &offset, statbuf.st_size);
+        if (nsent == -1) { perror("sendfile"); break; }
+        ret = pthread_mutex_unlock(&datafd_mutex);    // Unlock datafd
+        if (ret != 0) { 
+            fprintf(stderr, "Error unlocking mutex: %s\n", strerror(ret));
+            exit(EXIT_FAILURE);
         }
 
-        /* Close connection */
-        ret = close(client_fd);
-        if (ret == -1 ) { perror("close"); return -1; }
-        syslog(LOG_DEBUG, "Closed connection from %u", accepted_sockaddr.sin_addr.s_addr);
+        /* Reset packet_len */
+        packet_len = 0;
     }
+
+    /* Close connection */
+    printf("fd = %d\n", fd);
+    ret = close(fd);
+    if (ret == -1 ) { perror("close"); }
+    syslog(LOG_DEBUG, "Closed connection from %u", accepted_sockaddr.sin_addr.s_addr);
+
+    /* Set complete flag */
+    SLIST_FOREACH(np, &head, conns) {
+        if (np->thread_id == pthread_self()) {
+            np->completed = 1;
+            break;
+        }
+    }
+
+    pthread_exit(NULL);
 }
 
-void handler(int sig)
+void exit_handler(int sig)
 {
+    /* Wait for any open connections to close */
+    struct conn *np;
+    SLIST_FOREACH(np, &head, conns) {
+        if (np->completed == 0 || np->completed == 1) {
+            ret = pthread_join(np->thread_id, NULL);
+            if (ret != 0)
+                fprintf(stderr, "Failed to join thread: %s\n", strerror(ret));
+        }
+    }
+
     /* Close any open sockets */
-    close(client_fd);
     close(server_fd);
 
     /* Delete data file */
@@ -137,16 +248,80 @@ void handler(int sig)
     exit(EXIT_SUCCESS);
 }
 
-int set_handler(void)
+int set_exit_handler(void)
 {
     struct sigaction act;
-    act.sa_handler = handler;
+    act.sa_handler = exit_handler;
     sigemptyset(&act.sa_mask);
     act.sa_flags = 0;
     ret = sigaction(SIGINT, &act, NULL);
     if (ret == -1) { perror("Error"); return -1; }
     ret = sigaction(SIGTERM, &act, NULL);
     if (ret == -1) { perror("Error"); return -1; }
+
+    return 0;
+}
+
+void time_handler(union sigval arg)
+{
+    int ret;
+
+    /* Get system wall clock time */
+    struct timespec tp;
+    ret = clock_gettime(CLOCK_REALTIME, &tp);
+    if (ret == -1) { perror("Failed to get current time"); exit(EXIT_FAILURE); }
+
+    struct tm *t = localtime(&tp.tv_sec);
+    
+    char cur_time[64];
+    size_t len = strftime(cur_time, sizeof(cur_time), "%a, %d %b %Y %T %z\n", t);
+    if (len == 0) {
+        perror("Failed to get current time");
+        exit(EXIT_FAILURE);
+    }
+    char timestamp[128] = "timestamp:";
+    strncat(timestamp, cur_time, len);
+
+    /* Write time to data file */
+    ret = pthread_mutex_lock(&datafd_mutex);      // Lock datafd
+    if (ret != 0) { 
+        fprintf(stderr, "Error locking mutex: %s\n", strerror(ret));
+        exit(EXIT_FAILURE);
+    }
+    ssize_t nwritten = write(datafd, &timestamp, strlen(timestamp));
+    if (nwritten == -1) { perror("write"); exit(EXIT_FAILURE); }
+    ret = pthread_mutex_unlock(&datafd_mutex);    // Unlock datafd
+    if (ret != 0) { 
+        fprintf(stderr, "Error unlocking mutex: %s\n", strerror(ret));
+        exit(EXIT_FAILURE);
+    }
+}
+
+int set_time_handler(void)
+{
+    struct sigevent sev;
+    sev.sigev_notify = SIGEV_THREAD;
+    sev.sigev_notify_function = time_handler;
+    sev.sigev_notify_attributes = NULL;
+    sev.sigev_value.sival_ptr = NULL;
+
+    timer_t timerid;
+
+    if (timer_create(CLOCK_REALTIME, &sev, &timerid) == -1) {
+        perror("Failed to create timer");
+        exit(EXIT_FAILURE);
+    }
+
+    /* Set timer to expire every 10 s */
+    struct itimerspec itimer = {
+        .it_value = {10, 0},
+        .it_interval = {10, 0},
+    };
+
+    if (timer_settime(timerid, 0, &itimer, NULL) == -1) {
+        perror("Failed to set timer");
+        exit(EXIT_FAILURE);
+    }
 
     return 0;
 }
