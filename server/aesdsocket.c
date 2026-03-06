@@ -11,7 +11,8 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <unistd.h>
-#include <sys/queue.h>
+//#include <sys/queue.h>
+#include "queue.h"
 #include <pthread.h>
 
 /* Linked list */
@@ -71,7 +72,7 @@ int main(int argc, char *argv[])
     }
 
     /* Set socket to listen for connections */
-    int backlog = 1;
+    int backlog = 10;
     ret = listen(server_fd, backlog);
     if (ret == -1) { perror("listen"); return -1; }
 
@@ -90,6 +91,7 @@ int main(int argc, char *argv[])
     SLIST_INIT(&head);
     struct conn *new_np;
     struct conn *np;
+    struct conn *next_np;
 
     struct sockaddr_in accepted_sockaddr;
     socklen_t addrlen = sizeof(accepted_sockaddr);
@@ -97,7 +99,6 @@ int main(int argc, char *argv[])
     int client_fd;
 
     pthread_t new_thread_id;
-    struct conn_info pthread_arg;
 
     /* Accept connections until SIGINT or SIGTERM */
     while (1) {
@@ -105,12 +106,12 @@ int main(int argc, char *argv[])
         client_fd = accept(server_fd, (struct sockaddr *)&accepted_sockaddr, &addrlen);
         if (client_fd == -1) { perror("accept"); return -1; }
         syslog(LOG_DEBUG, "Accepted connection from %u", accepted_sockaddr.sin_addr.s_addr);
-        printf("client_fd = %d\n", client_fd);
 
         /* Create new thread */
-        pthread_arg.fd = client_fd;
-        pthread_arg.accepted_sockaddr = accepted_sockaddr;
-        ret = pthread_create(&new_thread_id, NULL, send_receive, &pthread_arg);
+        struct conn_info *pthread_arg = (struct conn_info *)malloc(sizeof(struct conn_info));
+        pthread_arg->fd = client_fd;
+        pthread_arg->accepted_sockaddr = accepted_sockaddr;
+        ret = pthread_create(&new_thread_id, NULL, send_receive, pthread_arg);
         if (ret != 0) {
             fprintf(stderr, "Failed to create new thread: %s\n", strerror(ret));
             exit(EXIT_FAILURE);
@@ -123,7 +124,7 @@ int main(int argc, char *argv[])
         SLIST_INSERT_HEAD(&head, new_np, conns);
 
         /* Iterate over linked list */
-        SLIST_FOREACH(np, &head, conns) {
+        SLIST_FOREACH_SAFE(np, &head, conns, next_np) {
             /* Join if complete */
             if (np->completed == 1) {
                 ret = pthread_join(np->thread_id, NULL);
@@ -144,6 +145,7 @@ void *send_receive(void *arg)
     struct conn_info *info = (struct conn_info *)arg;
     int fd = info->fd;
     struct sockaddr_in accepted_sockaddr = info->accepted_sockaddr;
+    free(arg);
 
     struct conn *np;
     char *packet_buf = (char *)malloc(packet_buf_len);
@@ -207,9 +209,9 @@ void *send_receive(void *arg)
         /* Reset packet_len */
         packet_len = 0;
     }
+    free(packet_buf);
 
     /* Close connection */
-    printf("fd = %d\n", fd);
     ret = close(fd);
     if (ret == -1 ) { perror("close"); }
     syslog(LOG_DEBUG, "Closed connection from %u", accepted_sockaddr.sin_addr.s_addr);
