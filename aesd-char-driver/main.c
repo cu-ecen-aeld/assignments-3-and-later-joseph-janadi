@@ -61,27 +61,22 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     if (mutex_lock_interruptible(&dev->lock)) {
         return -ERESTARTSYS;
     }
-    // Copy all ring_buf entries to user buf
-    size_t entry_size;
-    unsigned long bto_copy;
-    if (dev->count > 0) {
+    // Copy ring_buf entry to user buf
+    if (*f_pos < dev->count) {
+        int idx = (dev->head + *f_pos) % SIZE_RING_BUF;
+        struct entry read_entry = dev->ring_buf[idx];
         // Get num bytes to copy to user buf
-        bto_copy = count;
-        entry_size = dev->ring_buf[dev->read_pos].size;
+        size_t entry_size = read_entry.size;
+        unsigned long bto_copy = count;
         if (entry_size < count) {
             bto_copy = entry_size;
         }
         retval += bto_copy;
         do {
-            bto_copy = copy_to_user(buf, dev->ring_buf[dev->read_pos].p, bto_copy);
+            bto_copy = copy_to_user(buf, read_entry.p, bto_copy);
         } while (bto_copy);
 
-        // Free entry pointer and increment f_pos
-        //kfree(dev->ring_buf[dev->read_pos].p);
-        //dev->ring_buf[dev->read_pos].p = NULL;
-        //dev->ring_buf[dev->read_pos].size = 0;
-        dev->read_pos = (dev->read_pos + 1) % SIZE_RING_BUF;
-        dev->count--;
+        *f_pos = *f_pos + 1;
     }
     mutex_unlock(&dev->lock);
 
@@ -124,7 +119,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         // If ring_buf full, free entry @ write_pos & increment read pointer
         if (dev->count == SIZE_RING_BUF) {
             kfree(dev->ring_buf[dev->write_pos].p);
-            dev->read_pos = (dev->read_pos + 1) % SIZE_RING_BUF;
+            dev->head = (dev->head + 1) % SIZE_RING_BUF;
         }
         // Update entry
         dev->ring_buf[dev->write_pos].p = dev->entry_buf.p;
@@ -186,7 +181,7 @@ int aesd_init_module(void)
     mutex_init(&aesd_device.lock);
     aesd_device.count = 0;
     aesd_device.write_pos = 0;
-    aesd_device.read_pos = 0;
+    aesd_device.head = 0;
     aesd_device.entry_buf.p = NULL;
     aesd_device.entry_buf.size = 0;
 

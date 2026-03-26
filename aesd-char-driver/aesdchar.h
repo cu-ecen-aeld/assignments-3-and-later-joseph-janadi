@@ -40,7 +40,7 @@ struct aesd_dev
     int count;
     int write_pos;
     struct entry entry_buf;
-    int read_pos;
+    int head;
 
     struct cdev cdev;     /* Char device structure      */
 };
