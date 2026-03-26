@@ -23,11 +23,25 @@
 #  define PDEBUG(fmt, args...) /* not debugging: nothing */
 #endif
 
+#define SIZE_RING_BUF (10)
+
+struct entry {
+    char *p;
+    size_t size;
+};
+
 struct aesd_dev
 {
     /**
      * TODO: Add structure(s) and locks needed to complete assignment requirements
      */
+    struct mutex lock;
+    struct entry ring_buf[SIZE_RING_BUF];
+    int count;
+    int write_pos;
+    struct entry entry_buf;
+    int read_pos;
+
     struct cdev cdev;     /* Char device structure      */
 };
 

@@ -1,0 +1,12 @@
+make -C /lib/modules/6.8.0-106-generic/build M=/home/user/Documents/assignments-3-and-later-joseph-janadi/aesd-char-driver modules
+make[1]: Entering directory '/usr/src/linux-headers-6.8.0-106-generic'
+warning: the compiler differs from the one used to build the kernel
+  The kernel was built by: x86_64-linux-gnu-gcc-12 (Ubuntu 12.3.0-1ubuntu1~22.04.3) 12.3.0
+  You are using:           
+  CC [M]  /home/user/Documents/assignments-3-and-later-joseph-janadi/aesd-char-driver/aesd-circular-buffer.o
+/bin/sh: 1: gcc-12: not found
+make[3]: *** [scripts/Makefile.build:243: /home/user/Documents/assignments-3-and-later-joseph-janadi/aesd-char-driver/aesd-circular-buffer.o] Error 127
+make[2]: *** [/usr/src/linux-headers-6.8.0-106-generic/Makefile:1936: /home/user/Documents/assignments-3-and-later-joseph-janadi/aesd-char-driver] Error 2
+make[1]: *** [Makefile:240: __sub-make] Error 2
+make[1]: Leaving directory '/usr/src/linux-headers-6.8.0-106-generic'
+make: *** [Makefile:24: modules] Error 2
