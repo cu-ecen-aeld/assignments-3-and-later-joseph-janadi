@@ -43,7 +43,11 @@ int resize_buf(char **buf, size_t *buf_len, size_t add_len);
 
 /* Globals */
 int server_fd = -1;
+#ifdef USE_AESD_CHAR_DEVICE
+const char *data_file = "/dev/aesdchar";
+#else
 const char *data_file = "/var/tmp/aesdsocketdata";
+#endif
 int datafd;
 const size_t BUF_SIZE = 500;
 size_t packet_buf_len = 500;
@@ -84,8 +88,8 @@ int main(int argc, char *argv[])
     pthread_mutex_init(&datafd_mutex, NULL);
 
     /* Set time handler */
-    ret = set_time_handler();
-    if (ret == -1) { return ret; }
+    //ret = set_time_handler();
+    //if (ret == -1) { return ret; }
 
     /* Initialize linked list */
     SLIST_INIT(&head);
@@ -157,7 +161,6 @@ void *send_receive(void *arg)
     size_t str_len;
     ssize_t nwritten;
     ssize_t nsent;
-    struct stat statbuf;
     off_t offset = 0;
     int ret;
 
@@ -195,10 +198,16 @@ void *send_receive(void *arg)
         if (nwritten == -1) { perror("write"); break; }
 
         /* Return contents of data file to client */
-        ret = fstat(datafd, &statbuf);
-        if (ret == -1) { perror("stat"); break; }
-        offset = 0;
-        nsent = sendfile(fd, datafd, &offset, statbuf.st_size);
+        ret = close(datafd);
+        if (ret == -1) { perror("write"); break; }
+        datafd = open(data_file, O_RDWR | O_APPEND | O_CREAT, 0755);
+        do {
+            nread = read(datafd, buf, BUF_SIZE);
+            if (nread == -1) { perror("read"); break; }
+            nsent = send(fd, buf, nread, 0);
+            if (nsent == -1) { perror("send"); break; }
+            offset += nread;
+        } while (nsent > 0);
         if (nsent == -1) { perror("sendfile"); break; }
         ret = pthread_mutex_unlock(&datafd_mutex);    // Unlock datafd
         if (ret != 0) { 
@@ -243,9 +252,11 @@ void exit_handler(int sig)
     close(server_fd);
 
     /* Delete data file */
-    ret = remove(data_file);
-    if (ret == -1) { perror("remove"); exit(EXIT_FAILURE); }
-    syslog(LOG_DEBUG, "Caught signal, exiting");
+    if (strcmp(data_file, "/dev/aesdchar") != 0) {
+        ret = remove(data_file);
+        if (ret == -1) { perror("remove"); exit(EXIT_FAILURE); }
+        syslog(LOG_DEBUG, "Caught signal, exiting");
+    }
 
     exit(EXIT_SUCCESS);
 }
@@ -372,7 +383,7 @@ int bind_socket(char *port_str)
     struct addrinfo *res;
     ret = getaddrinfo(NULL, port_str, &hints, &res);
     if (ret != 0) {
-        printf("getaddrinfo: %s\n", gai_strerror(ret));
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(ret));
         return -1;
     }
     ret = bind(server_fd, res->ai_addr, res->ai_addrlen);
@@ -387,7 +398,7 @@ int resize_buf(char **buf, size_t *buf_len, size_t add_len)
     size_t new_len = *buf_len + add_len;
     char *tmp = realloc(*buf, new_len);
     if (tmp == NULL) {
-        printf("realloc failed\n");
+        fprintf(stderr, "realloc failed\n");
         return -1;
     }
     *buf = tmp;

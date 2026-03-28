@@ -63,6 +63,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     }
     // Copy ring_buf entry to user buf
     if (*f_pos < dev->count) {
+        PDEBUG("*f_pos = %lld; dev->count = %d", *f_pos, dev->count);
         int idx = (dev->head + *f_pos) % SIZE_RING_BUF;
         struct entry read_entry = dev->ring_buf[idx];
         // Get num bytes to copy to user buf
