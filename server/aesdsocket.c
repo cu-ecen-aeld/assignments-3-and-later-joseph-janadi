@@ -15,7 +15,7 @@
 #include "queue.h"
 #include <pthread.h>
 #include <sys/ioctl.h>
-#include "aesd_ioctl.h"
+#include "../aesd_ioctl.h"
 
 /* Linked list */
 struct conn {

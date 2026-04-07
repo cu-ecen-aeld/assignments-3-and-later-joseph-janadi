@@ -1,6 +1,5 @@
 CC ?= $(CROSS_COMPILE)gcc
-CFLAGS ?= -Wall -Werror -pthread \
-		  -I../aesd-char-driver
+CFLAGS ?= -Wall -Werror -pthread
 USE_AESD_CHAR_DEVICE ?= 1
 ifeq ($(USE_AESD_CHAR_DEVICE), 1)
 	CFLAGS += -DUSE_AESD_CHAR_DEVICE
