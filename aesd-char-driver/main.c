@@ -179,6 +179,7 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
 
 static long aesd_adjust_file_offset(struct file *filp, unsigned int write_cmd, unsigned int write_cmd_offset)
 {
+    PDEBUG("Adjusting f_pos to %u, %u", write_cmd, write_cmd_offset);
     struct aesd_dev *dev = filp->private_data;
 
     if (write_cmd > SIZE_RING_BUF) {    // write_cmd out of range
@@ -202,6 +203,7 @@ static long aesd_adjust_file_offset(struct file *filp, unsigned int write_cmd, u
 
     offset += write_cmd_offset;
     filp->f_pos = offset;
+    PDEBUG("Adjusted f_pos to %lld", filp->f_pos);
 
     return offset;
 }
@@ -212,6 +214,7 @@ long aesd_ioctl(struct file *filp, unsigned int request, unsigned long arg)
 
     switch (request) {
         case AESDCHAR_IOCSEEKTO:
+            PDEBUG("ioclt: AESDCHAR_IOCSEEKTO");
             struct aesd_seekto seekto;
             if (copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto)) != 0) {
                 retval = EFAULT;

@@ -197,9 +197,11 @@ void *send_receive(void *arg)
             fprintf(stderr, "Error locking mutex: %s\n", strerror(ret));
             exit(EXIT_FAILURE);
         }
+
         // If seekto command, call ioctl
         if (strncmp(packet_buf, "AESDCHAR_IOCSEEKTO", 18) == 0) {
-            if (seek(datafd, packet_buf) < 0) {
+            offset = seek(datafd, packet_buf);
+            if (offset < 0) {
                 fprintf(stderr, "Error seeking in data file\n");
                 exit(EXIT_FAILURE);
             }
@@ -208,18 +210,21 @@ void *send_receive(void *arg)
         else {
             nwritten = write(datafd, packet_buf, packet_len);
             if (nwritten == -1) { perror("write"); break; }
+            offset = lseek(datafd, 0, SEEK_SET);
+            if (offset < 0) { perror("lseek"); break; }
         }
 
         /* Return contents of data file to client */
+        /*
         ret = close(datafd);
-        if (ret == -1) { perror("write"); break; }
+        if (ret == -1) { perror("close"); break; }
         datafd = open(data_file, O_RDWR | O_APPEND | O_CREAT, 0755);
+        */
         do {
             nread = read(datafd, buf, BUF_SIZE);
             if (nread == -1) { perror("read"); break; }
             nsent = send(fd, buf, nread, 0);
             if (nsent == -1) { perror("send"); break; }
-            offset += nread;
         } while (nsent > 0);
         if (nsent == -1) { perror("sendfile"); break; }
         ret = pthread_mutex_unlock(&datafd_mutex);    // Unlock datafd
