@@ -14,6 +14,8 @@
 //#include <sys/queue.h>
 #include "queue.h"
 #include <pthread.h>
+#include <sys/ioctl.h>
+#include "aesd_ioctl.h"
 
 /* Linked list */
 struct conn {
@@ -35,6 +37,7 @@ pthread_mutex_t datafd_mutex;
 
 /* Prototypes */
 void *send_receive(void *arg);
+long seek(int datafd, char *packet_buf);
 int set_exit_handler(void);
 int set_time_handler(void);
 int create_daemon(void);
@@ -188,14 +191,24 @@ void *send_receive(void *arg)
         if (newline_ptr == NULL)
             continue;
 
-        /* Packet complete: write to data file */
+        /* Packet complete */
         ret = pthread_mutex_lock(&datafd_mutex);      // Lock datafd
         if (ret != 0) { 
             fprintf(stderr, "Error locking mutex: %s\n", strerror(ret));
             exit(EXIT_FAILURE);
         }
-        nwritten = write(datafd, packet_buf, packet_len);
-        if (nwritten == -1) { perror("write"); break; }
+        // If seekto command, call ioctl
+        if (strncmp(packet_buf, "AESDCHAR_IOCSEEKTO", 18) == 0) {
+            if (seek(datafd, packet_buf) < 0) {
+                fprintf(stderr, "Error seeking in data file\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+        // If not seekto command, write packet to data file
+        else {
+            nwritten = write(datafd, packet_buf, packet_len);
+            if (nwritten == -1) { perror("write"); break; }
+        }
 
         /* Return contents of data file to client */
         ret = close(datafd);
@@ -234,6 +247,16 @@ void *send_receive(void *arg)
     }
 
     pthread_exit(NULL);
+}
+
+long seek(int datafd, char *packet_buf)
+{
+    struct aesd_seekto seekto;
+    seekto.write_cmd = packet_buf[19] - '0';
+    seekto.write_cmd_offset = packet_buf[21] - '0';
+    int retval = ioctl(datafd, AESDCHAR_IOCSEEKTO, &seekto);
+
+    return retval;
 }
 
 void exit_handler(int sig)

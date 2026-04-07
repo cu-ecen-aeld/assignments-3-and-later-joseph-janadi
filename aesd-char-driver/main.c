@@ -18,6 +18,7 @@
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include "aesdchar.h"
+#include "aesd_ioctl.h"
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -61,24 +62,31 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     if (mutex_lock_interruptible(&dev->lock)) {
         return -ERESTARTSYS;
     }
-    // Copy ring_buf entry to user buf
-    if (*f_pos < dev->count) {
-        PDEBUG("*f_pos = %lld; dev->count = %d", *f_pos, dev->count);
-        int idx = (dev->head + *f_pos) % SIZE_RING_BUF;
-        struct entry read_entry = dev->ring_buf[idx];
-        // Get num bytes to copy to user buf
-        size_t entry_size = read_entry.size;
-        unsigned long bto_copy = count;
-        if (entry_size < count) {
-            bto_copy = entry_size;
-        }
-        retval += bto_copy;
-        do {
-            bto_copy = copy_to_user(buf, read_entry.p, bto_copy);
-        } while (bto_copy);
 
-        *f_pos = *f_pos + 1;
+    // Get starting entry and its byte offset
+    int cur_entry_idx = dev->head;
+    struct entry cur_entry = dev->ring_buf[cur_entry_idx];
+    loff_t byte_idx = *f_pos;
+    int num_entries = dev->count - 1;   // TODO: Must subtract 1 to work, but why?
+    while (num_entries && byte_idx >= cur_entry.size) {
+        byte_idx -= cur_entry.size;
+        cur_entry_idx = (cur_entry_idx + 1) % SIZE_RING_BUF;
+        cur_entry = dev->ring_buf[cur_entry_idx];
+        num_entries--;
     }
+
+    // Copy bytes from entry to user space buf
+    size_t bto_copy = cur_entry.size - byte_idx;
+    if (count < bto_copy) {
+        bto_copy = count;
+    }
+    retval = bto_copy;
+    // Update f_pos
+    *f_pos = *f_pos + bto_copy;
+    if (copy_to_user(buf, cur_entry.p + byte_idx, bto_copy)) {
+        retval = -EFAULT;
+    }
+
     mutex_unlock(&dev->lock);
 
     return retval;
@@ -110,6 +118,8 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     unsigned long bto_copy = count;
     int idx;
     while (bto_copy) {
+        // Adjust f_pos
+        *f_pos = *f_pos + bto_copy;
         idx = dev->entry_buf.size - bto_copy;
         bto_copy = copy_from_user(dev->entry_buf.p + idx, buf, bto_copy);
     }
@@ -139,12 +149,92 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 
     return retval;
 }
+
+loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
+{
+    struct aesd_dev *dev = filp->private_data;
+
+    if (mutex_lock_interruptible(&dev->lock)) {
+        return -ERESTARTSYS;
+    }
+
+    // Get total size
+    loff_t size = 0;
+    struct entry cur_entry;
+    int cur_entry_idx = dev->head;
+    for (int i = 0; i < dev->count; i++) {
+        cur_entry = dev->ring_buf[cur_entry_idx];
+        size += cur_entry.size;
+        cur_entry_idx = (cur_entry_idx + 1) % SIZE_RING_BUF;
+    }
+
+    // Get new f_pos
+    PDEBUG("Offset %lld from %lld on file of size %lld", offset, filp->f_pos, size);
+    loff_t retval = fixed_size_llseek(filp, offset, whence, size);
+
+    mutex_unlock(&dev->lock);
+
+    return retval;
+}
+
+static long aesd_adjust_file_offset(struct file *filp, unsigned int write_cmd, unsigned int write_cmd_offset)
+{
+    struct aesd_dev *dev = filp->private_data;
+
+    if (write_cmd > SIZE_RING_BUF) {    // write_cmd out of range
+        return -EINVAL;
+    }
+
+    long offset = 0;
+    struct entry cur_entry;
+    int cur_entry_idx = dev->head;
+    // Add sizes of previous entries to offset
+    for (int i = 0; i < write_cmd; i++) {
+        cur_entry = dev->ring_buf[cur_entry_idx];
+        offset += cur_entry.size;
+        cur_entry_idx = (cur_entry_idx + 1) % SIZE_RING_BUF;
+    }
+    cur_entry = dev->ring_buf[cur_entry_idx];
+
+    if (write_cmd_offset > cur_entry.size) {    // write_cmd_offset out of range
+        return -EINVAL;
+    }
+
+    offset += write_cmd_offset;
+    filp->f_pos = offset;
+
+    return offset;
+}
+
+long aesd_ioctl(struct file *filp, unsigned int request, unsigned long arg)
+{
+    long retval;
+
+    switch (request) {
+        case AESDCHAR_IOCSEEKTO:
+            struct aesd_seekto seekto;
+            if (copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto)) != 0) {
+                retval = EFAULT;
+            }
+            else {
+                retval = aesd_adjust_file_offset(filp, seekto.write_cmd, seekto.write_cmd_offset);
+            }
+            break;
+        default:
+            retval = EINVAL;
+    }
+
+    return retval;
+}
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
     .write =    aesd_write,
     .open =     aesd_open,
     .release =  aesd_release,
+    .llseek =   aesd_llseek,
+    .unlocked_ioctl =   aesd_ioctl,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
