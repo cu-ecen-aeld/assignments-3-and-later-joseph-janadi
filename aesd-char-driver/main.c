@@ -238,6 +238,7 @@ struct file_operations aesd_fops = {
     .release =  aesd_release,
     .llseek =   aesd_llseek,
     .unlocked_ioctl =   aesd_ioctl,
+    .compat_ioctl =     compat_ptr_ioctl,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
