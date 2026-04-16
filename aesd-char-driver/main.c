@@ -29,11 +29,11 @@ struct aesd_dev aesd_device;
 
 int aesd_open(struct inode *inode, struct file *filp)
 {
+    struct aesd_dev *dev;
     PDEBUG("open");
     /**
      * TODO: handle open
      */
-    struct aesd_dev *dev;
     dev = container_of(inode->i_cdev, struct aesd_dev, cdev);
     filp->private_data = dev;
 
@@ -53,21 +53,26 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                 loff_t *f_pos)
 {
     ssize_t retval = 0;
+    struct aesd_dev *dev;
+    int cur_entry_idx, num_entries;
+    struct entry cur_entry;
+    loff_t byte_idx;
+    size_t bto_copy;
     PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
     /**
      * TODO: handle read
      */
-    struct aesd_dev *dev = filp->private_data;
+    dev = filp->private_data;
 
     if (mutex_lock_interruptible(&dev->lock)) {
         return -ERESTARTSYS;
     }
 
     // Get starting entry and its byte offset
-    int cur_entry_idx = dev->head;
-    struct entry cur_entry = dev->ring_buf[cur_entry_idx];
-    loff_t byte_idx = *f_pos;
-    int num_entries = dev->count - 1;   // TODO: Must subtract 1 to work, but why?
+    cur_entry_idx = dev->head;
+    cur_entry = dev->ring_buf[cur_entry_idx];
+    byte_idx = *f_pos;
+    num_entries = dev->count - 1;   // TODO: Must subtract 1 to work, but why?
     while (num_entries && byte_idx >= cur_entry.size) {
         byte_idx -= cur_entry.size;
         cur_entry_idx = (cur_entry_idx + 1) % SIZE_RING_BUF;
@@ -76,7 +81,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     }
 
     // Copy bytes from entry to user space buf
-    size_t bto_copy = cur_entry.size - byte_idx;
+    bto_copy = cur_entry.size - byte_idx;
     if (count < bto_copy) {
         bto_copy = count;
     }
@@ -96,17 +101,21 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
                 loff_t *f_pos)
 {
     ssize_t retval = 0;
+    struct aesd_dev *dev;
+    char *new_entry_buf;
+    unsigned long bto_copy;
+    int idx;
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
     /**
      * TODO: handle write
      */
-    struct aesd_dev *dev = filp->private_data;
+    dev = filp->private_data;
 
     if (mutex_lock_interruptible(&dev->lock)) {
         return -ERESTARTSYS;
     }
     // (Re)allocate entry buffer
-    char *new_entry_buf = krealloc(dev->entry_buf.p, dev->entry_buf.size + count, GFP_KERNEL);
+    new_entry_buf = krealloc(dev->entry_buf.p, dev->entry_buf.size + count, GFP_KERNEL);
     if (new_entry_buf == NULL) {
         PDEBUG("Failed to (re)allocate entry_buf");
         return -ENOMEM;
@@ -115,8 +124,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     dev->entry_buf.size += count;
 
     // Copy from user buf to kernel entry_buf
-    unsigned long bto_copy = count;
-    int idx;
+    bto_copy = count;
     while (bto_copy) {
         // Adjust f_pos
         *f_pos = *f_pos + bto_copy;
@@ -153,15 +161,17 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
 {
     struct aesd_dev *dev = filp->private_data;
+    struct entry cur_entry;
+    int cur_entry_idx;
+    loff_t size, retval;
 
     if (mutex_lock_interruptible(&dev->lock)) {
         return -ERESTARTSYS;
     }
 
     // Get total size
-    loff_t size = 0;
-    struct entry cur_entry;
-    int cur_entry_idx = dev->head;
+    size = 0;
+    cur_entry_idx = dev->head;
     for (int i = 0; i < dev->count; i++) {
         cur_entry = dev->ring_buf[cur_entry_idx];
         size += cur_entry.size;
@@ -170,7 +180,7 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
 
     // Get new f_pos
     PDEBUG("Offset %lld from %lld on file of size %lld", offset, filp->f_pos, size);
-    loff_t retval = fixed_size_llseek(filp, offset, whence, size);
+    retval = fixed_size_llseek(filp, offset, whence, size);
 
     mutex_unlock(&dev->lock);
 
@@ -179,16 +189,19 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
 
 static long aesd_adjust_file_offset(struct file *filp, unsigned int write_cmd, unsigned int write_cmd_offset)
 {
-    PDEBUG("Adjusting f_pos to %u, %u", write_cmd, write_cmd_offset);
     struct aesd_dev *dev = filp->private_data;
+    long offset;
+    struct entry cur_entry;
+    int cur_entry_idx;
+    PDEBUG("Adjusting f_pos to %u, %u", write_cmd, write_cmd_offset);
+    printk(KERN_DEBUG "Adjusting f_pos to %u, %u", write_cmd, write_cmd_offset);
 
     if (write_cmd > SIZE_RING_BUF) {    // write_cmd out of range
         return -EINVAL;
     }
 
-    long offset = 0;
-    struct entry cur_entry;
-    int cur_entry_idx = dev->head;
+    offset = 0;
+    cur_entry_idx = dev->head;
     // Add sizes of previous entries to offset
     for (int i = 0; i < write_cmd; i++) {
         cur_entry = dev->ring_buf[cur_entry_idx];
@@ -211,11 +224,11 @@ static long aesd_adjust_file_offset(struct file *filp, unsigned int write_cmd, u
 long aesd_ioctl(struct file *filp, unsigned int request, unsigned long arg)
 {
     long retval;
+    struct aesd_seekto seekto;
 
     switch (request) {
         case AESDCHAR_IOCSEEKTO:
-            PDEBUG("ioclt: AESDCHAR_IOCSEEKTO");
-            struct aesd_seekto seekto;
+            PDEBUG("ioctl: AESDCHAR_IOCSEEKTO");
             if (copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto)) != 0) {
                 retval = EFAULT;
             }
