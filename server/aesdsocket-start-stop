@@ -2,10 +2,12 @@
 
 case "$1" in
     start)
+        aesdchar_load
         start-stop-daemon -S --startas /usr/bin/aesdsocket -- -d
         ;;
     stop)
         start-stop-daemon -K --signal SIGTERM --exec /usr/bin/aesdsocket
+        aesdchar_unload
         ;;
 esac
 
