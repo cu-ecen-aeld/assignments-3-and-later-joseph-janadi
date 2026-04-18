@@ -257,8 +257,10 @@ void *send_receive(void *arg)
 long seek(int datafd, char *packet_buf)
 {
     struct aesd_seekto seekto;
-    seekto.write_cmd = packet_buf[19] - '0';
-    seekto.write_cmd_offset = packet_buf[21] - '0';
+    if (sscanf(packet_buf, "AESDCHAR_IOCSEEKTO:%d,%d\n", &seekto.write_cmd, &seekto.write_cmd_offset) <= 0) {
+        fprintf(stderr, "Error: sscanf in seek()\n");
+        exit(EXIT_FAILURE);
+    }
     int retval = ioctl(datafd, AESDCHAR_IOCSEEKTO, &seekto);
 
     return retval;
