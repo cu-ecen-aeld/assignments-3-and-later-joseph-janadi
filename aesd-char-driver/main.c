@@ -68,12 +68,17 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         return -ERESTARTSYS;
     }
 
+    // Ensure entries exist
+    if (dev->count == 0) {
+        return 0;
+    }
+
     // Get starting entry and its byte offset
     cur_entry_idx = dev->head;
     cur_entry = dev->ring_buf[cur_entry_idx];
     byte_idx = *f_pos;
     num_entries = dev->count - 1;   // TODO: Must subtract 1 to work, but why?
-    while (num_entries && byte_idx >= cur_entry.size) {
+    while ((num_entries > 0) && (byte_idx >= cur_entry.size)) {
         byte_idx -= cur_entry.size;
         cur_entry_idx = (cur_entry_idx + 1) % SIZE_RING_BUF;
         cur_entry = dev->ring_buf[cur_entry_idx];
@@ -147,7 +152,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         dev->write_pos = (dev->write_pos + 1) % SIZE_RING_BUF;
         // Increment count (num entries)
         if (dev->count < SIZE_RING_BUF) {
-            dev->count++;
+            dev->count = dev->count + 1;
         }
         // Null entry_buf for next write
         dev->entry_buf.p = NULL;
