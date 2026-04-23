@@ -54,7 +54,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 {
     ssize_t retval = 0;
     struct aesd_dev *dev;
-    int cur_entry_idx, num_entries;
+    int cur_entry_idx, remaining_entries;
     struct entry cur_entry;
     loff_t byte_idx;
     size_t bto_copy;
@@ -78,12 +78,17 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     cur_entry_idx = dev->head;
     cur_entry = dev->ring_buf[cur_entry_idx];
     byte_idx = *f_pos;
-    num_entries = dev->count - 1;   // TODO: Must subtract 1 to work, but why?
-    while ((num_entries > 0) && (byte_idx >= cur_entry.size)) {
+    remaining_entries = dev->count - 1;
+    while ((remaining_entries > 0) && (byte_idx >= cur_entry.size)) {
         byte_idx -= cur_entry.size;
         cur_entry_idx = (cur_entry_idx + 1) % SIZE_RING_BUF;
         cur_entry = dev->ring_buf[cur_entry_idx];
-        num_entries--;
+        remaining_entries--;
+    }
+    // Check if f_pos past end of device
+    if (byte_idx >= cur_entry.size) {
+        mutex_unlock(&dev->lock);
+        return 0;
     }
 
     // Copy bytes from entry to user space buf
@@ -92,10 +97,11 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         bto_copy = count;
     }
     retval = bto_copy;
-    // Update f_pos
-    *f_pos = *f_pos + bto_copy;
     if (copy_to_user(buf, cur_entry.p + byte_idx, bto_copy)) {
         retval = -EFAULT;
+    }
+    else {
+        *f_pos = *f_pos + bto_copy;
     }
 
     mutex_unlock(&dev->lock);
@@ -124,6 +130,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     new_entry_buf = krealloc(dev->entry_buf.p, dev->entry_buf.size + count, GFP_KERNEL);
     if (new_entry_buf == NULL) {
         PDEBUG("Failed to (re)allocate entry_buf");
+        mutex_unlock(&dev->lock);
         return -ENOMEM;
     }
     dev->entry_buf.p = new_entry_buf;
@@ -202,7 +209,8 @@ static long aesd_adjust_file_offset(struct file *filp, unsigned int write_cmd, u
     PDEBUG("Adjusting f_pos to %u, %u", write_cmd, write_cmd_offset);
     printk(KERN_DEBUG "Adjusting f_pos to %u, %u", write_cmd, write_cmd_offset);
 
-    if (write_cmd > SIZE_RING_BUF) {    // write_cmd out of range
+    if (write_cmd >= dev->count) {    // write_cmd out of range
+        PDEBUG("Error: write_cmd out of range");
         return -EINVAL;
     }
 
@@ -217,11 +225,12 @@ static long aesd_adjust_file_offset(struct file *filp, unsigned int write_cmd, u
     cur_entry = dev->ring_buf[cur_entry_idx];
 
     if (write_cmd_offset > cur_entry.size) {    // write_cmd_offset out of range
+        PDEBUG("Error: write_cmd_offset out of range");
         return -EINVAL;
     }
 
     offset += write_cmd_offset;
-    filp->f_pos = offset;
+    aesd_llseek(filp, offset, SEEK_SET);
     PDEBUG("Adjusted f_pos to %lld", filp->f_pos);
 
     return offset;
