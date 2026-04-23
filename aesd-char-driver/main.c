@@ -70,6 +70,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 
     // Ensure entries exist
     if (dev->count == 0) {
+        mutex_unlock(&dev->lock);
         return 0;
     }
 
@@ -94,6 +95,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     // Update f_pos
     *f_pos = *f_pos + bto_copy;
     if (copy_to_user(buf, cur_entry.p + byte_idx, bto_copy)) {
+        mutex_unlock(&dev->lock);
         retval = -EFAULT;
     }
 
