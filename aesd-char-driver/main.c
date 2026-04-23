@@ -78,7 +78,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     cur_entry_idx = dev->head;
     cur_entry = dev->ring_buf[cur_entry_idx];
     byte_idx = *f_pos;
-    num_entries = dev->count;   // TODO: Must subtract 1 to work, but why?
+    num_entries = dev->count - 1;   // TODO: Must subtract 1 to work, but why?
     while ((num_entries > 0) && (byte_idx >= cur_entry.size)) {
         byte_idx -= cur_entry.size;
         cur_entry_idx = (cur_entry_idx + 1) % SIZE_RING_BUF;
@@ -95,7 +95,6 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     // Update f_pos
     *f_pos = *f_pos + bto_copy;
     if (copy_to_user(buf, cur_entry.p + byte_idx, bto_copy)) {
-        mutex_unlock(&dev->lock);
         retval = -EFAULT;
     }
 
